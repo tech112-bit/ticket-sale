@@ -1,0 +1,145 @@
+// PostgreSQL + Prisma schema matching the booking domain and NextAuth adapter
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Domain enums
+enum VehicleType {
+  BUS
+  TRAIN
+}
+
+enum SeatLayout {
+  BUS_ONE_PLUS_ONE
+  BUS_TWO_PLUS_ONE
+  BUS_TWO_PLUS_TWO
+  TRAIN_ONE_PLUS_ONE
+  TRAIN_TWO_PLUS_ONE
+}
+
+enum SeatStatus {
+  AVAILABLE
+  BOOKED
+  RESERVED
+  UNAVAILABLE
+}
+
+// Auth models (Prisma Adapter for NextAuth.js)
+model User {
+  id             String      @id @default(cuid())
+  name           String?
+  email          String?     @unique
+  emailVerified  DateTime?
+  image          String?
+  password       String?
+  bookings       Booking[]
+  accounts       Account[]
+  sessions       Session[]
+  authenticators Authenticator[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@unique([token])
+}
+
+model Authenticator {
+  credentialID         String  @unique
+  userId               String
+  providerAccountId    String
+  credentialPublicKey  Bytes
+  counter              Int
+  credentialDeviceType String
+  credentialBackedUp   Boolean
+  transports           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, credentialID])
+}
+
+// Booking domain
+model Route {
+  id            String @id @default(cuid())
+  startLocation String
+  endLocation   String
+  trips         Trip[]
+}
+
+model Vehicle {
+  id          String      @id @default(cuid())
+  type        VehicleType
+  operator    String
+  seatLayout  SeatLayout
+  seatMapJson String
+  trips       Trip[]
+}
+
+model Trip {
+  id            String    @id @default(cuid())
+  routeId       String
+  route         Route     @relation(fields: [routeId], references: [id])
+  vehicleId     String
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id])
+  departureTime DateTime
+  arrivalTime   DateTime
+  price         Float
+  seats         Seat[]
+}
+
+model Seat {
+  id         String     @id @default(cuid())
+  tripId     String
+  trip       Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  seatNumber String
+  status     SeatStatus @default(AVAILABLE)
+  booking    Booking?   @relation("SeatBooking")
+
+  @@unique([tripId, seatNumber])
+}
+
+model Booking {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  seatId    String   @unique
+  seat      Seat     @relation("SeatBooking", fields: [seatId], references: [id])
+  bookedAt  DateTime @default(now())
+  status    String
+}
