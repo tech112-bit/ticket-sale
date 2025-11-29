@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { PrismaClient } = require("@prisma/client");
+const bcrypt = require("bcryptjs");
 
 const prisma = new PrismaClient();
 
@@ -62,6 +63,73 @@ async function createSeatsForTrip(tripId, layoutKey) {
       create: { tripId, seatNumber },
     });
   }
+}
+
+async function ensureDemoUser() {
+  const passwordHash = await bcrypt.hash("demo-pass-123", 10);
+  return prisma.user.upsert({
+    where: { email: "demo@tickets.test" },
+    update: {
+      name: "Demo Traveler",
+      password: passwordHash,
+      emailVerified: new Date(),
+    },
+    create: {
+      email: "demo@tickets.test",
+      name: "Demo Traveler",
+      password: passwordHash,
+      emailVerified: new Date(),
+    },
+  });
+}
+
+async function markSeatStatuses(tripId, seatStatuses) {
+  const entries = Object.entries(seatStatuses);
+  for (const [seatNumber, status] of entries) {
+    await prisma.seat.updateMany({
+      where: { tripId, seatNumber },
+      data: { status },
+    });
+  }
+}
+
+async function createBookingForSeat(
+  userId,
+  tripId,
+  seatNumber,
+  status = "CONFIRMED",
+  paymentMethod = "CARD",
+) {
+  const seat = await prisma.seat.findFirst({ where: { tripId, seatNumber } });
+  if (!seat) return;
+
+  await prisma.seat.update({
+    where: { id: seat.id },
+    data: { status: "BOOKED" },
+  });
+
+  const booking = await prisma.booking.upsert({
+    where: { seatId: seat.id },
+    update: { userId, status },
+    create: { userId, seatId: seat.id, status },
+  });
+
+  await prisma.ticket.upsert({
+    where: { bookingId: booking.id },
+    update: {
+      userId,
+      status,
+      reference: booking.id,
+      paymentMethod,
+    },
+    create: {
+      bookingId: booking.id,
+      userId,
+      status,
+      reference: booking.id,
+      paymentMethod,
+    },
+  });
 }
 
 async function main() {
@@ -133,6 +201,16 @@ async function main() {
   await createSeatsForTrip(tripBus.id, busVehicle.seatLayout);
   await createSeatsForTrip(tripTrain.id, trainVehicle.seatLayout);
   await createSeatsForTrip(demoTrip.id, demoVehicle.seatLayout);
+
+  // Demo account and sample bookings
+  const demoUser = await ensureDemoUser();
+
+  await markSeatStatuses(tripBus.id, { A1: "BOOKED", A2: "RESERVED", B1: "UNAVAILABLE" });
+  await markSeatStatuses(tripTrain.id, { A1: "BOOKED", B3: "RESERVED" });
+  await markSeatStatuses(demoTrip.id, { A1: "BOOKED", A2: "RESERVED" });
+
+  await createBookingForSeat(demoUser.id, tripBus.id, "A1", "CONFIRMED", "KPAY");
+  await createBookingForSeat(demoUser.id, demoTrip.id, "B2", "PENDING", "WAVE");
 
   console.log("Seed completed");
 }

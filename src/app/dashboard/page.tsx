@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { ProfileForm, PasswordForm } from "@/components/account/AccountForms";
 import { auth } from "@/lib/auth";
 import { fetchBookings, hasDb } from "@/lib/data";
 import { cancelBookingAction, confirmBookingPaymentAction } from "@/lib/actions";
@@ -22,6 +23,7 @@ export default async function DashboardPage() {
   const session = await auth();
   const userId = session?.user?.id || null;
   const bookings = userId ? await fetchBookings(userId) : [];
+  const activeBookings = bookings.filter((b) => b.status !== "CANCELLED");
   const confirmed = bookings.filter((b) => b.status === "CONFIRMED").length;
   const pending = bookings.filter(
     (b) => b.status !== "CONFIRMED" && b.status !== "CANCELLED",
@@ -68,88 +70,15 @@ export default async function DashboardPage() {
       </section>
 
       {userId ? (
-        bookings.length > 0 ? (
+        activeBookings.length > 0 ? (
           <div className="grid gap-6 md:grid-cols-2">
-            {bookings.map((booking) => (
-              <div
+            {activeBookings.map((booking) => (
+              <BookingCard
                 key={booking.id}
-                className="rounded-3xl border border-slate-200 bg-white p-6 shadow-md transition hover:-translate-y-1 hover:shadow-lg"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-slate-700">
-                      {booking.vehicleType}
-                    </span>
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Ref: {booking.reference}
-                    </span>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      booking.status === "CONFIRMED"
-                        ? "bg-green-100 text-green-700"
-                        : booking.status === "CANCELLED"
-                          ? "bg-rose-100 text-rose-700"
-                          : "bg-amber-100 text-amber-700"
-                    }`}
-                  >
-                    {booking.status}
-                  </span>
-                </div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">
-                  {booking.routeLabel}
-                </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Seat {booking.seatNumber} | Depart {booking.departure}
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3 text-sm font-medium text-slate-700">
-                  <Link
-                    href={`/book/${booking.tripId}`}
-                    className="rounded-xl bg-sky-600 px-4 py-2 text-white shadow-sm transition hover:bg-sky-700"
-                  >
-                    View seats
-                  </Link>
-                  {booking.status === "CONFIRMED" ? (
-                    <a
-                      href={`/api/tickets/${booking.id}`}
-                      download
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-800 shadow-sm transition hover:border-slate-300"
-                    >
-                      Download ticket (PDF)
-                    </a>
-                  ) : null}
-                  <Link
-                    href={`/book/${booking.tripId}?changeSeat=1`}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-800 shadow-sm transition hover:border-slate-300"
-                  >
-                    Change seat
-                  </Link>
-                  {booking.status !== "CONFIRMED" && booking.status !== "CANCELLED" ? (
-                    <form action={handleConfirm}>
-                      <input type="hidden" name="bookingId" value={booking.id} />
-                      <button
-                        type="submit"
-                        className="rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-green-800 shadow-sm transition hover:border-green-300 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!canMutate}
-                      >
-                        Proceed to payment
-                      </button>
-                    </form>
-                  ) : null}
-                  {booking.status !== "CANCELLED" ? (
-                    <form action={handleCancel}>
-                      <input type="hidden" name="bookingId" value={booking.id} />
-                      <button
-                        type="submit"
-                        className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-rose-800 shadow-sm transition hover:border-rose-300 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!canMutate}
-                      >
-                        Cancel booking
-                      </button>
-                    </form>
-                  ) : null}
-                </div>
-              </div>
+                booking={booking}
+                canMutate={canMutate}
+                onConfirm={handleConfirm}
+              />
             ))}
           </div>
         ) : (
@@ -198,22 +127,21 @@ export default async function DashboardPage() {
       )}
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-md md:p-8">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Profile</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Account security</h2>
             <p className="text-sm text-slate-600">
-              Profile editing and password updates will be secured behind
-              NextAuth server actions.
+              Update your display name and rotate your password using server actions secured by
+              NextAuth and Prisma.
             </p>
           </div>
-          <div className="flex flex-wrap gap-3 text-sm font-semibold">
-            <button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-800 shadow-sm transition hover:border-slate-300">
-              Update info
-            </button>
-            <button className="rounded-xl bg-slate-900 px-4 py-2 text-white shadow-sm transition hover:bg-slate-800">
-              Manage password
-            </button>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Signed in as {session?.user?.email || "guest"}
           </div>
+        </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <ProfileForm defaultName={session?.user?.name ?? ""} />
+          <PasswordForm />
         </div>
       </section>
     </div>
@@ -221,6 +149,81 @@ export default async function DashboardPage() {
 }
 
 type StatTone = "success" | "warning" | "neutral" | "danger";
+
+function BookingCard({
+  booking,
+  canMutate,
+  onConfirm,
+}: {
+  booking: Awaited<ReturnType<typeof fetchBookings>>[number];
+  canMutate: boolean;
+  onConfirm: (formData: FormData) => Promise<void>;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-md transition hover:-translate-y-1 hover:shadow-lg">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-slate-700">
+            {booking.vehicleType}
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Ref: {booking.reference}
+          </span>
+        </div>
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            booking.status === "CONFIRMED"
+              ? "bg-green-100 text-green-700"
+              : booking.status === "CANCELLED"
+                ? "bg-rose-100 text-rose-700"
+                : "bg-amber-100 text-amber-700"
+          }`}
+        >
+          {booking.status}
+        </span>
+      </div>
+      <div className="mt-2 text-lg font-semibold text-slate-900">
+        {booking.routeLabel}
+      </div>
+      <div className="mt-1 text-sm text-slate-600">
+        Seat {booking.seatNumber} | Depart {booking.departure}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-3 text-sm font-medium text-slate-700">
+        <Link
+          href={`/book/${booking.tripId}`}
+          className="rounded-xl bg-sky-600 px-4 py-2 text-white shadow-sm transition hover:bg-sky-700"
+        >
+          View seats
+        </Link>
+        <a
+          href={`/api/tickets/${booking.id}`}
+          download
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-800 shadow-sm transition hover:border-slate-300"
+        >
+          Download ticket (PDF)
+        </a>
+        <Link
+          href={`/book/${booking.tripId}?changeSeat=1`}
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-800 shadow-sm transition hover:border-slate-300"
+        >
+          Change seat
+        </Link>
+        {booking.status !== "CONFIRMED" && booking.status !== "CANCELLED" ? (
+          <form action={onConfirm}>
+            <input type="hidden" name="bookingId" value={booking.id} />
+            <button
+              type="submit"
+              className="rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-green-800 shadow-sm transition hover:border-green-300 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!canMutate}
+            >
+              Pay now
+            </button>
+          </form>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function StatPill({
   label,

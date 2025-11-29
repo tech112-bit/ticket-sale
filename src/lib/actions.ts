@@ -1,11 +1,13 @@
 "use server";
 
-import { Prisma } from "@prisma/client";
+import { PaymentMethod, Prisma } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
+import { auth } from "./auth";
 import { prisma } from "./prisma";
+import { DEFAULT_PAYMENT_METHOD } from "./payments";
 import {
   getFeaturedTrips,
   getTripById,
@@ -13,6 +15,12 @@ import {
   searchTrips,
 } from "./mockData";
 import { sendBookingEmail, sendVerificationEmail } from "./mail";
+
+export type ActionResult = {
+  success: boolean;
+  error?: string | null;
+  message?: string | null;
+};
 
 const searchSchema = z.object({
   start: z.string().optional(),
@@ -24,6 +32,15 @@ const credentialsSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   name: z.string().optional(),
+});
+
+const profileSchema = z.object({
+  name: z.string().trim().min(2, "Name must be at least 2 characters").max(80),
+});
+
+const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(6, "Enter your current password"),
+  newPassword: z.string().min(8, "New password must be at least 8 characters"),
 });
 
 export async function searchTripsAction(values: unknown) {
@@ -147,11 +164,13 @@ export async function createBookingAction(data: {
   tripId: string;
   seatId: string;
   userId: string;
+  paymentMethod?: PaymentMethod;
 }) {
   const hasDatabase = Boolean(process.env.DATABASE_URL);
   const reference = `BK-${Math.floor(Math.random() * 90000 + 10000)}`;
   let seatLabelForEmail: string | null = null;
   let tripSummary: { start: string; end: string; departure: string } | null = null;
+  const paymentMethod = data.paymentMethod || DEFAULT_PAYMENT_METHOD;
 
   if (hasDatabase) {
     try {
@@ -167,6 +186,7 @@ export async function createBookingAction(data: {
         end: trip.route.endLocation,
         departure: trip.departureTime.toISOString(),
       };
+      const amount = trip.price;
 
       await prisma.$transaction(async (tx) => {
         const seat = await tx.seat.findUnique({
@@ -188,12 +208,21 @@ export async function createBookingAction(data: {
           throw new Error("seat_unavailable");
         }
 
-        await tx.booking.create({
+        const booking = await tx.booking.create({
           data: {
             userId: data.userId,
-            status: "CONFIRMED",
+            status: "PENDING",
             seatId: data.seatId,
           },
+        });
+
+        await upsertTicketSafe(tx, {
+          bookingId: booking.id,
+          userId: data.userId,
+          reference,
+          paymentMethod,
+          amount,
+          status: "PENDING",
         });
 
         seatLabelForEmail = seat.seatNumber;
@@ -285,7 +314,7 @@ export async function confirmBookingPaymentAction(formData: FormData) {
   try {
     const booking = await prisma.booking.findUnique({
       where: { id: bookingId },
-      include: { seat: true },
+      include: { seat: { include: { trip: true } }, ticket: true },
     });
     if (!booking) {
       return { success: false, error: "Booking not found" };
@@ -296,6 +325,18 @@ export async function confirmBookingPaymentAction(formData: FormData) {
         where: { id: bookingId },
         data: { status: "CONFIRMED" },
       });
+      try {
+        await upsertTicketSafe(tx, {
+          bookingId,
+          userId: booking.userId,
+          reference: booking.ticket?.reference || bookingId,
+          paymentMethod: booking.ticket?.paymentMethod || DEFAULT_PAYMENT_METHOD,
+          amount: booking.seat.trip?.price,
+          status: "CONFIRMED",
+        });
+      } catch (ticketError) {
+        console.warn("[booking] ticket confirm skipped", ticketError);
+      }
       if (booking.seat.status !== "BOOKED") {
         await tx.seat.update({
           where: { id: booking.seatId },
@@ -340,6 +381,14 @@ export async function cancelBookingAction(formData: FormData) {
         where: { id: bookingId },
         data: { status: "CANCELLED" },
       });
+      try {
+        await tx.ticket.updateMany({
+          where: { bookingId },
+          data: { status: "CANCELLED" },
+        });
+      } catch (ticketError) {
+        console.warn("[booking] ticket cancel skipped", ticketError);
+      }
       await tx.seat.update({
         where: { id: booking.seatId },
         data: { status: "AVAILABLE" },
@@ -352,5 +401,131 @@ export async function cancelBookingAction(formData: FormData) {
   } catch (error) {
     console.error("cancelBookingAction error", error);
     return { success: false, error: "Cancel failed" };
+  }
+}
+
+export async function updateProfileAction(
+  _prevState: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  const hasDatabase = Boolean(process.env.DATABASE_URL);
+  if (!userId || !hasDatabase) {
+    return { success: false, error: "You must be signed in to update your profile." };
+  }
+
+  const name = formData.get("name")?.toString().trim() || "";
+  const parsed = profileSchema.safeParse({ name });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid name" };
+  }
+
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { name: parsed.data.name },
+    });
+    return { success: true, message: "Profile updated" };
+  } catch (error) {
+    console.error("updateProfileAction error", error);
+    return { success: false, error: "Could not update profile right now." };
+  }
+}
+
+export async function changePasswordAction(
+  _prevState: ActionResult | undefined,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  const hasDatabase = Boolean(process.env.DATABASE_URL);
+  if (!userId || !hasDatabase) {
+    return { success: false, error: "You must be signed in to change your password." };
+  }
+
+  const input = passwordChangeSchema.safeParse({
+    currentPassword: formData.get("currentPassword")?.toString() || "",
+    newPassword: formData.get("newPassword")?.toString() || "",
+  });
+
+  if (!input.success) {
+    const issue = input.error.issues[0];
+    return { success: false, error: issue?.message || "Invalid password input" };
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { password: true },
+    });
+    if (!user?.password) {
+      return {
+        success: false,
+        error: "Password login is not enabled for this account.",
+      };
+    }
+
+    const matches = await compare(input.data.currentPassword, user.password);
+    if (!matches) {
+      return { success: false, error: "Current password is incorrect." };
+    }
+
+    const isSame = await compare(input.data.newPassword, user.password);
+    if (isSame) {
+      return { success: false, error: "Choose a different password." };
+    }
+
+    const newHash = await hash(input.data.newPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: newHash },
+    });
+
+    return { success: true, message: "Password updated" };
+  } catch (error) {
+    console.error("changePasswordAction error", error);
+    return { success: false, error: "Could not change password right now." };
+  }
+}
+
+// Helper to create or update a ticket without failing the booking flow if the table is missing.
+async function upsertTicketSafe(
+  tx: Prisma.TransactionClient,
+  data: {
+    bookingId: string;
+    userId: string;
+    reference: string;
+    paymentMethod: PaymentMethod;
+    amount?: number | null;
+    status: string;
+  },
+) {
+  try {
+    const existing = await tx.ticket.findUnique({ where: { bookingId: data.bookingId } });
+    if (existing) {
+      await tx.ticket.update({
+        where: { bookingId: data.bookingId },
+        data: {
+          status: data.status,
+          paymentMethod: data.paymentMethod,
+          amount: data.amount ?? undefined,
+          reference: data.reference,
+        },
+      });
+    } else {
+      await tx.ticket.create({
+        data: {
+          bookingId: data.bookingId,
+          userId: data.userId,
+          reference: data.reference,
+          paymentMethod: data.paymentMethod,
+          amount: data.amount ?? undefined,
+          status: data.status,
+        },
+      });
+    }
+  } catch (error) {
+    console.warn("[ticket] skipped ticket upsert", error);
   }
 }

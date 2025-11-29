@@ -76,7 +76,30 @@ export async function fetchTripWithSeats(tripId: string) {
       where: { id: tripId },
       include: { route: true, vehicle: true, seats: true },
     });
-    if (!trip) return null;
+    if (!trip) {
+      // Fallback to mock data if DB doesn't have this trip yet
+      const mock = getTripById(tripId);
+      if (!mock) return null;
+      const seats = generateSeats(undefined, mock.seatLayout);
+
+      return {
+        id: mock.id,
+        operator: mock.operator,
+        type: mock.type,
+        routeLabel: formatRoute(mock.route.start, mock.route.end),
+        price: mock.price,
+        departureTime: mock.departureTime,
+        arrivalTime: mock.arrivalTime,
+        durationLabel: mock.durationLabel,
+        seatsLeft: seats.filter((s) => s.status === SeatStatus.AVAILABLE).length,
+        seatLayout: mock.seatLayout,
+        seats: seats.map((seat) => ({
+          id: seat.id,
+          label: seat.seatNumber,
+          status: seat.status,
+        })),
+      };
+    }
 
     return {
       id: trip.id,
@@ -112,6 +135,7 @@ export async function fetchBookings(userId?: string) {
           include: { trip: { include: { route: true, vehicle: true } } },
         },
       },
+      orderBy: { bookedAt: "desc" },
     });
 
     return bookings.map((booking) => ({

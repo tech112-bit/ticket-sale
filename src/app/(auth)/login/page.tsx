@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AuthError } from "next-auth";
+import { Prisma } from "@prisma/client";
 import { auth, signIn } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -9,10 +10,22 @@ async function login(formData: FormData) {
   const email = formData.get("email")?.toString().trim().toLowerCase() || "";
   const password = formData.get("password")?.toString() || "";
 
-  const user = await prisma.user.findUnique({
-    where: { email },
-    select: { emailVerified: true },
-  });
+  let user;
+  try {
+    user = await prisma.user.findUnique({
+      where: { email },
+      select: { emailVerified: true },
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P1001" || error.code === "P1002")
+    ) {
+      console.error("Database unavailable during login", error);
+      redirect("/login?error=database");
+    }
+    throw error;
+  }
   if (!user) {
     redirect("/login?error=credentials");
   }
@@ -49,6 +62,8 @@ export default async function LoginPage({
       ? "Incorrect email or password. Try again."
       : errorParam === "verify"
         ? "Check your email and verify your account before signing in."
+        : errorParam === "database"
+          ? "We could not reach the database. Check your connection and try again."
         : errorParam;
 
   return (

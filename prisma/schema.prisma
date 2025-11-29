@@ -29,6 +29,12 @@ enum SeatStatus {
   UNAVAILABLE
 }
 
+enum PaymentMethod {
+  KPAY
+  WAVE
+  CARD
+}
+
 // Auth models (Prisma Adapter for NextAuth.js)
 model User {
   id             String      @id @default(cuid())
@@ -38,6 +44,7 @@ model User {
   image          String?
   password       String?
   bookings       Booking[]
+  tickets        Ticket[]
   accounts       Account[]
   sessions       Session[]
   authenticators Authenticator[]
@@ -142,4 +149,18 @@ model Booking {
   seat      Seat     @relation("SeatBooking", fields: [seatId], references: [id])
   bookedAt  DateTime @default(now())
   status    String
+  ticket    Ticket?
+}
+
+model Ticket {
+  id            String         @id @default(cuid())
+  reference     String         @unique
+  bookingId     String         @unique
+  userId        String
+  paymentMethod PaymentMethod?
+  amount        Float?
+  issuedAt      DateTime       @default(now())
+  status        String
+  booking       Booking        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

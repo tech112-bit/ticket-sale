@@ -14,6 +14,11 @@ export async function bookSeatAction(
 
   const seatId = formData.get("seatId")?.toString();
   const tripId = formData.get("tripId")?.toString();
+  const paymentMethod = formData.get("paymentMethod")?.toString() as
+    | "CARD"
+    | "KPAY"
+    | "WAVE"
+    | undefined;
   if (!seatId) {
     return { success: false, error: "Select a seat before booking." };
   }
@@ -30,6 +35,7 @@ export async function bookSeatAction(
     tripId,
     seatId,
     userId: session.user.id,
+    paymentMethod,
   });
 
   if (!result.success) {
@@ -42,9 +48,29 @@ export async function bookSeatAction(
 export default async function BookPage({
   params,
 }: {
-  params: { tripId: string };
+  params: Promise<{ tripId: string }>;
 }) {
-  const { tripId } = params;
+  const resolvedParams = await params;
+  const tripId = resolvedParams.tripId;
+  if (!tripId) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+        <h1 className="text-2xl font-bold text-slate-900">Trip not found</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Missing trip information. Please return to search and try again.
+        </p>
+        <div className="mt-4">
+          <Link
+            href="/search"
+            className="text-sm font-semibold text-sky-700 hover:text-sky-800"
+          >
+            Back to search
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const trip = await fetchTripWithSeats(tripId);
   const session = await auth();
   const isLoggedIn = Boolean(session?.user?.id);
